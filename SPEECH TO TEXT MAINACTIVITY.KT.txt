@@ -1,0 +1,520 @@
+package com.example.speechtotextapp
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.Uri
+import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody
+import org.json.JSONObject
+import java.io.IOException
+import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
+
+class MainActivity : ComponentActivity() {
+
+    private val resultText =
+        mutableStateOf("Pick MP3 to start")
+
+    private val uploadProgress =
+        mutableStateOf(0)
+
+    // YOUR NGROK URL
+    private val BASE_URL =
+        "https://fool-vaporizer-alibi.ngrok-free.dev"
+
+    private val picker =
+        registerForActivityResult(
+            ActivityResultContracts.GetContent()
+        ) { uri: Uri? ->
+
+            uri?.let {
+                uploadAudio(it)
+            }
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+
+        super.onCreate(savedInstanceState)
+
+        setContent {
+
+            val scrollState =
+                rememberScrollState()
+
+            MaterialTheme {
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                ) {
+
+                    // PICK MP3 BUTTON
+                    Button(
+                        onClick = {
+                            picker.launch("audio/*")
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Pick MP3")
+                    }
+
+                    Spacer(
+                        modifier = Modifier.height(16.dp)
+                    )
+
+                    // PROGRESS BAR
+                    LinearProgressIndicator(
+                        progress = {
+                            uploadProgress.value / 100f
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(
+                        modifier = Modifier.height(8.dp)
+                    )
+
+                    Text(
+                        text = "Upload: ${uploadProgress.value}%",
+                        fontSize = 14.sp
+                    )
+
+                    Spacer(
+                        modifier = Modifier.height(16.dp)
+                    )
+
+                    // TARGET LANGUAGE
+                    var targetLanguage by remember {
+                        mutableStateOf("id")
+                    }
+
+                    val languages = mapOf(
+                        "English" to "en",
+                        "Indonesian" to "id",
+                        "Spanish" to "es",
+                        "French" to "fr",
+                        "German" to "de",
+                        "Japanese" to "ja",
+                        "Korean" to "ko",
+                        "Chinese" to "zh"
+                    )
+
+                    var targetExpanded by remember {
+                        mutableStateOf(false)
+                    }
+
+                    Box {
+
+                        Button(
+                            onClick = {
+                                targetExpanded = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+
+                            Text(
+                                "Translate To: ${
+                                    languages.entries.find {
+                                        it.value == targetLanguage
+                                    }?.key
+                                }"
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = targetExpanded,
+                            onDismissRequest = {
+                                targetExpanded = false
+                            }
+                        ) {
+
+                            languages.forEach { (name, code) ->
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(name)
+                                    },
+                                    onClick = {
+
+                                        targetLanguage = code
+
+                                        targetExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(
+                        modifier = Modifier.height(12.dp)
+                    )
+
+                    // TRANSLATE BUTTON
+                    Button(
+                        onClick = {
+
+                            translateText(targetLanguage)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Translate")
+                    }
+
+                    Spacer(
+                        modifier = Modifier.height(12.dp)
+                    )
+
+                    // COPY BUTTON
+                    Button(
+                        onClick = {
+
+                            val clipboard =
+                                getSystemService(
+                                    Context.CLIPBOARD_SERVICE
+                                ) as ClipboardManager
+
+                            val clip =
+                                ClipData.newPlainText(
+                                    "Transcription",
+                                    resultText.value
+                                )
+
+                            clipboard.setPrimaryClip(clip)
+
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Text copied!",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Copy Text")
+                    }
+
+                    Spacer(
+                        modifier = Modifier.height(12.dp)
+                    )
+
+                    // SCROLLABLE TEXT BOX
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(400.dp)
+                    ) {
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp)
+                                .verticalScroll(scrollState)
+                        ) {
+
+                            Text(
+                                text = "Result",
+                                fontSize = 14.sp
+                            )
+
+                            Spacer(
+                                modifier = Modifier.height(8.dp)
+                            )
+
+                            Text(
+                                text = resultText.value,
+                                style = TextStyle(
+                                    fontSize = 16.sp,
+                                    lineHeight = 24.sp
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // UPLOAD AUDIO
+    private fun uploadAudio(uri: Uri) {
+
+        resultText.value = "Uploading..."
+        uploadProgress.value = 10
+
+        Thread {
+
+            try {
+
+                val inputStream =
+                    contentResolver.openInputStream(uri)
+
+                if (inputStream == null) {
+
+                    runOnUiThread {
+
+                        resultText.value =
+                            "Cannot open file"
+                    }
+
+                    return@Thread
+                }
+
+                val bytes =
+                    inputStream.readBytes()
+
+                inputStream.close()
+
+                val client =
+                    OkHttpClient.Builder()
+
+                        .connectTimeout(
+                            60,
+                            TimeUnit.SECONDS
+                        )
+
+                        .writeTimeout(
+                            120,
+                            TimeUnit.SECONDS
+                        )
+
+                        .readTimeout(
+                            120,
+                            TimeUnit.SECONDS
+                        )
+
+                        .build()
+
+                val requestBody =
+                    RequestBody.create(
+                        "audio/*"
+                            .toMediaTypeOrNull(),
+                        bytes
+                    )
+
+                val multipartBody =
+                    MultipartBody.Builder()
+
+                        .setType(
+                            MultipartBody.FORM
+                        )
+
+                        .addFormDataPart(
+                            "file",
+                            "audio.mp3",
+                            requestBody
+                        )
+
+                        .build()
+
+                val request =
+                    Request.Builder()
+
+                        .url(
+                            "$BASE_URL/transcribe"
+                        )
+
+                        .post(multipartBody)
+
+                        .build()
+
+                client.newCall(request)
+
+                    .enqueue(object : Callback {
+
+                        override fun onFailure(
+                            call: Call,
+                            e: IOException
+                        ) {
+
+                            runOnUiThread {
+
+                                resultText.value =
+                                    "Upload failed: ${e.message}"
+
+                                uploadProgress.value = 0
+                            }
+                        }
+
+                        override fun onResponse(
+                            call: Call,
+                            response: Response
+                        ) {
+
+                            val body =
+                                response.body?.string()
+
+                            runOnUiThread {
+
+                                uploadProgress.value = 100
+
+                                if (
+                                    response.isSuccessful &&
+                                    body != null
+                                ) {
+
+                                    try {
+
+                                        val json =
+                                            JSONObject(body)
+
+                                        val text =
+                                            json.optString(
+                                                "text",
+                                                "No text found"
+                                            )
+
+                                        resultText.value =
+                                            text
+
+                                    } catch (
+                                        e: Exception
+                                    ) {
+
+                                        resultText.value =
+                                            "Parse error: $body"
+                                    }
+
+                                } else {
+
+                                    resultText.value =
+                                        "Server error: ${response.code}"
+                                }
+                            }
+                        }
+                    })
+
+            } catch (e: Exception) {
+
+                runOnUiThread {
+
+                    resultText.value =
+                        "Exception: ${e.message}"
+
+                    uploadProgress.value = 0
+                }
+            }
+
+        }.start()
+    }
+
+    // TRANSLATE TEXT
+    private fun translateText(to: String) {
+
+        // SAVE ORIGINAL TEXT
+        val originalText =
+            resultText.value
+
+        // SHOW LOADING
+        runOnUiThread {
+
+            resultText.value =
+                "Translating..."
+        }
+
+        Thread {
+
+            try {
+
+                val client = OkHttpClient()
+
+                val encodedText =
+                    URLEncoder.encode(
+                        originalText,
+                        "UTF-8"
+                    )
+
+                val url =
+                    "https://api.mymemory.translated.net/get?q=$encodedText&langpair=auto|$to"
+
+                val request =
+                    Request.Builder()
+                        .url(url)
+                        .build()
+
+                client.newCall(request)
+
+                    .enqueue(object : Callback {
+
+                        override fun onFailure(
+                            call: Call,
+                            e: IOException
+                        ) {
+
+                            runOnUiThread {
+
+                                resultText.value =
+                                    "Translation failed"
+                            }
+                        }
+
+                        override fun onResponse(
+                            call: Call,
+                            response: Response
+                        ) {
+
+                            val body =
+                                response.body?.string()
+
+                            if (body != null) {
+
+                                try {
+
+                                    val json =
+                                        JSONObject(body)
+
+                                    val translatedText =
+
+                                        json.getJSONObject(
+                                            "responseData"
+                                        ).getString(
+                                            "translatedText"
+                                        )
+
+                                    runOnUiThread {
+
+                                        // REPLACE OLD TEXT
+                                        resultText.value =
+                                            translatedText
+                                    }
+
+                                } catch (
+                                    e: Exception
+                                ) {
+
+                                    runOnUiThread {
+
+                                        resultText.value =
+                                            "Translation parse error"
+                                    }
+                                }
+                            }
+                        }
+                    })
+
+            } catch (e: Exception) {
+
+                runOnUiThread {
+
+                    resultText.value =
+                        "Translation error: ${e.message}"
+                }
+            }
+
+        }.start()
+    }
+}

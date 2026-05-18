@@ -1,0 +1,388 @@
+package com.example.translatorapp
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Bundle
+import android.speech.tts.TextToSpeech
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.translatorapp.ui.theme.TranslatorAppTheme
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.net.URLEncoder
+import java.util.Locale
+import kotlin.concurrent.thread
+
+class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
+
+    private lateinit var textToSpeech: TextToSpeech
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        textToSpeech = TextToSpeech(this, this)
+
+        enableEdgeToEdge()
+
+        setContent {
+            TranslatorAppTheme {
+                TranslatorScreen(textToSpeech)
+            }
+        }
+    }
+
+    override fun onInit(status: Int) {
+
+        if (status == TextToSpeech.SUCCESS) {
+            textToSpeech.language = Locale.US
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+
+        textToSpeech.stop()
+        textToSpeech.shutdown()
+    }
+}
+
+@Composable
+fun TranslatorScreen(textToSpeech: TextToSpeech) {
+
+    val context = LocalContext.current
+
+    var inputText by remember {
+        mutableStateOf("")
+    }
+
+    var translatedText by remember {
+        mutableStateOf("")
+    }
+
+    var pronunciationText by remember {
+        mutableStateOf("")
+    }
+
+    val languages = listOf(
+        "id" to "Indonesian",
+        "en" to "English",
+        "zh-CN" to "Chinese",
+        "ja" to "Japanese",
+        "ko" to "Korean",
+        "fr" to "French",
+        "de" to "German",
+        "es" to "Spanish",
+        "ru" to "Russian",
+        "ar" to "Arabic",
+        "hi" to "Hindi",
+        "th" to "Thai",
+        "vi" to "Vietnamese",
+        "pt" to "Portuguese",
+        "it" to "Italian"
+    )
+
+    var selectedLanguage by remember {
+        mutableStateOf(languages[0])
+    }
+
+    var expanded by remember {
+        mutableStateOf(false)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp)
+    ) {
+
+        Text(
+            text = "Translator App",
+            fontSize = 28.sp
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        OutlinedTextField(
+            value = inputText,
+            onValueChange = {
+                inputText = it
+            },
+            label = {
+                Text("Enter text")
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Button(
+            onClick = {
+                expanded = true
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Language: ${selectedLanguage.second}")
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = {
+                expanded = false
+            }
+        ) {
+
+            languages.forEach { language ->
+
+                DropdownMenuItem(
+                    text = {
+                        Text(language.second)
+                    },
+                    onClick = {
+                        selectedLanguage = language
+                        expanded = false
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Button(
+            onClick = {
+
+                thread {
+
+                    try {
+
+                        val encodedText =
+                            URLEncoder.encode(
+                                inputText,
+                                "UTF-8"
+                            )
+
+                        val url =
+                            "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${selectedLanguage.first}&dt=t&dt=rm&q=$encodedText"
+
+                        val client = OkHttpClient()
+
+                        val request = Request.Builder()
+                            .url(url)
+                            .build()
+
+                        val response =
+                            client.newCall(request).execute()
+
+                        val body =
+                            response.body?.string()
+
+                        val bodyText = body ?: ""
+
+                        try {
+
+                            val mainPart =
+                                bodyText.substringAfter("[[[")
+
+                            val translated =
+                                mainPart
+                                    .substringAfter("\"")
+                                    .substringBefore("\"")
+
+                            translatedText = translated
+
+                            val quoteRegex =
+                                "\"(.*?)\"".toRegex()
+
+                            val allQuotes =
+                                quoteRegex.findAll(bodyText)
+                                    .map { it.groupValues[1] }
+                                    .toList()
+
+                            pronunciationText = ""
+
+                            for (item in allQuotes) {
+
+                                val clean = item.trim()
+
+                                val hasLetters =
+                                    clean.any { it.isLetter() }
+
+                                val hasNumbers =
+                                    clean.any { it.isDigit() }
+
+                                if (
+                                    clean != translatedText &&
+                                    clean != inputText &&
+                                    clean.length > 1 &&
+                                    hasLetters &&
+                                    !hasNumbers &&
+                                    !clean.startsWith("en") &&
+                                    !clean.startsWith("id") &&
+                                    !clean.startsWith("zh") &&
+                                    !clean.startsWith("ja") &&
+                                    clean.lowercase() != translatedText.lowercase()
+                                ) {
+
+                                    pronunciationText = clean
+                                    break
+                                }
+                            }
+
+                        } catch (e: Exception) {
+
+                            translatedText = "Translation error"
+                            pronunciationText = ""
+                        }
+
+                    } catch (e: Exception) {
+
+                        translatedText =
+                            "Connection error"
+
+                        pronunciationText = ""
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Translate")
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = "Result",
+            fontSize = 20.sp
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(300.dp)
+        ) {
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp)
+                    .verticalScroll(
+                        rememberScrollState()
+                    )
+            ) {
+
+                Text(
+                    text = translatedText,
+                    fontSize = 28.sp
+                )
+
+                if (
+                    pronunciationText.isNotEmpty() &&
+                    pronunciationText != translatedText
+                ) {
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "How to read:",
+                        fontSize = 18.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(5.dp))
+
+                    Text(
+                        text = pronunciationText,
+                        fontSize = 22.sp
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Button(
+            onClick = {
+
+                val locale =
+                    when (selectedLanguage.first) {
+
+                        "id" -> Locale("id", "ID")
+                        "en" -> Locale.US
+                        "zh-CN" -> Locale.CHINESE
+                        "ja" -> Locale.JAPANESE
+                        "ko" -> Locale.KOREAN
+                        "fr" -> Locale.FRENCH
+                        "de" -> Locale.GERMAN
+                        "es" -> Locale("es", "ES")
+                        "ru" -> Locale("ru", "RU")
+                        "ar" -> Locale("ar", "SA")
+                        "hi" -> Locale("hi", "IN")
+                        "th" -> Locale("th", "TH")
+                        "vi" -> Locale("vi", "VN")
+                        "pt" -> Locale("pt", "PT")
+                        "it" -> Locale.ITALIAN
+
+                        else -> Locale.US
+                    }
+
+                textToSpeech.language = locale
+
+                textToSpeech.speak(
+                    translatedText,
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    null
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Speak Translation")
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Button(
+            onClick = {
+
+                val clipboard =
+                    context.getSystemService(
+                        Context.CLIPBOARD_SERVICE
+                    ) as ClipboardManager
+
+                val clip =
+                    ClipData.newPlainText(
+                        "translated text",
+                        translatedText
+                    )
+
+                clipboard.setPrimaryClip(clip)
+
+                Toast.makeText(
+                    context,
+                    "Copied!",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Copy Result")
+        }
+    }
+}
