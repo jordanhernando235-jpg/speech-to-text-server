@@ -1,0 +1,5 @@
+whisper_env/
+__pycache__/
+uploads/
+*.wav
+*.mp3
